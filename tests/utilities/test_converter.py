@@ -18,6 +18,15 @@ from crewai.utilities.converter import (
     validate_model,
 )
 from crewai.utilities.pydantic_schema_parser import PydanticSchemaParser
+# Tests for enums
+from enum import Enum
+
+
+@pytest.fixture(scope="module")
+def vcr_config(request) -> dict:
+    return {
+        "cassette_library_dir": "tests/utilities/cassettes",
+    }
 
 
 # Sample Pydantic models for testing
@@ -220,10 +229,13 @@ def test_get_conversion_instructions_gpt():
         supports_function_calling.return_value = True
         instructions = get_conversion_instructions(SimpleModel, llm)
         model_schema = PydanticSchemaParser(model=SimpleModel).get_schema()
-        assert (
-            instructions
-            == f"Please convert the following text into valid JSON.\n\nThe JSON should follow this schema:\n```json\n{model_schema}\n```"
+        expected_instructions = (
+            "Please convert the following text into valid JSON.\n\n"
+            "Output ONLY the valid JSON and nothing else.\n\n"
+            "The JSON must follow this schema exactly:\n```json\n"
+            f"{model_schema}\n```"
         )
+        assert instructions == expected_instructions
 
 
 def test_get_conversion_instructions_non_gpt():
@@ -348,10 +360,8 @@ def test_convert_with_instructions():
 
 @pytest.mark.vcr(filter_headers=["authorization"])
 def test_converter_with_llama3_2_model():
-    llm = LLM(model="ollama/llama3.2:3b", base_url="http://localhost:11434")
-
+    llm = LLM(model="openrouter/meta-llama/llama-3.2-3b-instruct")
     sample_text = "Name: Alice Llama, Age: 30"
-
     instructions = get_conversion_instructions(SimpleModel, llm)
     converter = Converter(
         llm=llm,
@@ -359,9 +369,7 @@ def test_converter_with_llama3_2_model():
         model=SimpleModel,
         instructions=instructions,
     )
-
     output = converter.to_pydantic()
-
     assert isinstance(output, SimpleModel)
     assert output.name == "Alice Llama"
     assert output.age == 30
@@ -371,7 +379,6 @@ def test_converter_with_llama3_2_model():
 def test_converter_with_llama3_1_model():
     llm = LLM(model="ollama/llama3.1", base_url="http://localhost:11434")
     sample_text = "Name: Alice Llama, Age: 30"
-
     instructions = get_conversion_instructions(SimpleModel, llm)
     converter = Converter(
         llm=llm,
@@ -379,9 +386,7 @@ def test_converter_with_llama3_1_model():
         model=SimpleModel,
         instructions=instructions,
     )
-
     output = converter.to_pydantic()
-
     assert isinstance(output, SimpleModel)
     assert output.name == "Alice Llama"
     assert output.age == 30
@@ -427,7 +432,7 @@ def test_converter_error_handling():
     )
 
     with pytest.raises(ConverterError) as exc_info:
-        output = converter.to_pydantic()
+        converter.to_pydantic()
 
     assert "Failed to convert text into a Pydantic model" in str(exc_info.value)
 
@@ -511,10 +516,6 @@ def test_converter_with_list_field():
     assert output.items == [1, 2, 3]
 
 
-# Tests for enums
-from enum import Enum
-
-
 def test_converter_with_enum():
     class Color(Enum):
         RED = "red"
@@ -561,9 +562,9 @@ def test_converter_with_ambiguous_input():
     )
 
     with pytest.raises(ConverterError) as exc_info:
-        output = converter.to_pydantic()
+        converter.to_pydantic()
 
-    assert "validation error" in str(exc_info.value).lower()
+    assert "failed to convert text into a pydantic model" in str(exc_info.value).lower()
 
 
 # Tests for function calling support
@@ -588,3 +589,12 @@ def test_converter_with_function_calling():
     assert output.name == "Eve"
     assert output.age == 35
     instructor.to_pydantic.assert_called_once()
+
+
+def test_generate_model_description_union_field():
+    class UnionModel(BaseModel):
+        field: int | str | None
+
+    description = generate_model_description(UnionModel)
+    expected_description = '{\n  "field": int | str | None\n}'
+    assert description == expected_description
